@@ -114,7 +114,7 @@ int main() {
         crow::response res;
         res.set_header("Content-Type", "text/html; charset=utf-8");
 
-        std::string html = R"(
+        std::string html = R"HTML(
 <!DOCTYPE html>
 <html>
 <head>
@@ -238,7 +238,7 @@ int main() {
 
 </body>
 </html>
-        )";
+        )HTML";
 
         res.write(html);
         return res;
