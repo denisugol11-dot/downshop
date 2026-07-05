@@ -1,17 +1,24 @@
 #include "crow_all.h"
+#include <cstdlib>
+#include <string>
 
 int main() {
     crow::SimpleApp app;
 
     // Главная страница
     CROW_ROUTE(app, "/")([]() {
-        return "<h1>Добро пожаловать в мой магазин!</h1>"
-               "<p><a href='/items'>Перейти к товарам</a></p>";
+        crow::response res;
+        res.set_header("Content-Type", "text/html; charset=utf-8");
+        res.write("<h1>Добро пожаловать в мой магазин!</h1>"
+                   "<p><a href='/items'>Перейти к товарам</a></p>");
+        return res;
     });
 
-    // Страница с товарами и картинками
+    // Страница с товарами
     CROW_ROUTE(app, "/items")([]() {
-        return R"(
+        crow::response res;
+        res.set_header("Content-Type", "text/html; charset=utf-8");
+        res.write(R"(
             <html>
             <head>
                 <title>Товары</title>
@@ -46,15 +53,19 @@ int main() {
 
             </body>
             </html>
-        )";
+        )");
+        return res;
     });
 
-    // Отдаём файлы из папки static (картинки, css и т.д.)
+    // Отдаём файлы из папки static
     CROW_ROUTE(app, "/static/<string>")([](std::string filename) {
         crow::response res;
         res.set_static_file_info("static/" + filename);
         return res;
     });
 
-    app.port(18080).multithreaded().run();
+    const char* port_env = std::getenv("PORT");
+    int port = port_env ? std::stoi(port_env) : 18080;
+
+    app.port(port).multithreaded().run();
 }
