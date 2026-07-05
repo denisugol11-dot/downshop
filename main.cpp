@@ -9,10 +9,10 @@
 
 using json = nlohmann::json;
 
-// ==== Каталог товаров (хранится на сервере — цену клиенту не доверяем!) ====
+// ==== Каталог товаров ====
 struct Product {
     std::string name;
-    int price_cents; // цена в центах (3000 = $30.00)
+    int price_cents;
     std::vector<std::string> colors;
     bool has_sizes;
 };
@@ -31,35 +31,18 @@ std::map<std::string, Product> products = {
     {"shoes3",  {"Кроссовки Nike Acronym",  12000, {"Белый", "Чёрный", "Бело-оранжевый"}, true}}
 };
 
-// ==== Соответствие цвета -> ключ для имени файла картинки ====
-std::map<std::string, std::string> colorKeys = {
-    {"Белый", "white"},
-    {"Чёрный", "black"},
-    {"Серый", "gray"},
-    {"Красный", "red"},
-    {"Синий", "blue"},
-    {"Зелёный", "green"},
-    {"Бело-серый", "white-gray"},
-    {"Чёрно-синий", "black-blue"},
-    {"Бело-красный", "white-red"},
-    {"Бело-синий", "white-blue"},
-    {"Бело-оранжевый", "white-orange"}
-};
-
 // ==== Стоимость доставки (в центах) ====
 std::map<std::string, int> deliveryOptions = {
     {"Самовывоз", 0},
-    {"Курьер по Клайпеде", 500},
-    {"Почта Европы", 1500}
+    {"Курьер по городу", 500},
+    {"Почта России", 800}
 };
 
-// ==== Функция для сбора ответа от curl в строку ====
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* out) {
     out->append((char*)contents, size * nmemb);
     return size * nmemb;
 }
 
-// ==== URL-кодирование (нужно для отправки данных в Stripe) ====
 std::string urlEncode(const std::string& value) {
     CURL* curl = curl_easy_init();
     char* output = curl_easy_escape(curl, value.c_str(), value.length());
@@ -71,8 +54,10 @@ std::string urlEncode(const std::string& value) {
 
 // ==== Создание сессии оплаты Stripe ====
 // cartItems = [(product_id, color, size), ...]
+// address = "Страна, Город, Улица/дом, Индекс"
 std::string createCheckoutSession(const std::vector<std::tuple<std::string, std::string, std::string>>& cartItems,
-                                   const std::string& deliveryMethod) {
+                                   const std::string& deliveryMethod,
+                                   const std::string& address) {
 
     std::string secretKey = std::getenv("STRIPE_SECRET_KEY") ? std::getenv("STRIPE_SECRET_KEY") : "";
     if (secretKey.empty()) {
@@ -105,7 +90,7 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
         index++;
     }
 
-    // Добавляем доставку отдельной строкой
+    // Доставка отдельной строкой
     if (deliveryOptions.find(deliveryMethod) != deliveryOptions.end()) {
         int deliveryCost = deliveryOptions[deliveryMethod];
         std::string prefix = "line_items[" + std::to_string(index) + "]";
@@ -120,7 +105,12 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
 
     postFields += "mode=payment&";
     postFields += "success_url=" + urlEncode(domain + "/success") + "&";
-    postFields += "cancel_url=" + urlEncode(domain + "/cancel");
+    postFields += "cancel_url=" + urlEncode(domain + "/cancel") + "&";
+
+    // Передаём адрес в описание платежа — увидишь его в панели Stripe в деталях платежа
+    if (!address.empty()) {
+        postFields += "payment_intent_data[description]=" + urlEncode("Адрес доставки: " + address) + "&";
+    }
 
     CURL* curl = curl_easy_init();
     std::string response;
@@ -160,7 +150,6 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
 int main() {
     crow::SimpleApp app;
 
-    // ==== Главная страница с каталогом ====
     CROW_ROUTE(app, "/")([]() {
         crow::response res;
         res.set_header("Content-Type", "text/html; charset=utf-8");
@@ -180,8 +169,7 @@ int main() {
     .products { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
     .product { background: white; border-radius: 10px; padding: 15px; width: 250px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     .product img { width: 100%; height: 200px; object-fit: cover; border-radius: 8px; }
-    .price { color: green; font-weight: bold; font-size: 18px; }
-    select, button { padding: 8px; margin-top: 8px; width: 100%; border-radius: 6px; border: 1px solid #ccc; }
+    select, input, button { padding: 8px; margin-top: 8px; width: 100%; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
     button { background: #2563eb; color: white; border: none; cursor: pointer; font-weight: bold; }
     button:hover { background: #1d4ed8; }
     #cart-box { max-width: 420px; margin: 30px auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
@@ -189,7 +177,8 @@ int main() {
     .remove-btn { color: red; cursor: pointer; background: none; border: none; width: auto; padding: 0 8px; }
     #checkout-btn { background: #16a34a; margin-top: 15px; }
     #checkout-btn:hover { background: #15803d; }
-    label { font-size: 13px; color: #555; margin-top: 6px; display: block; }
+    label { font-size: 13px; color: #555; margin-top: 10px; display: block; }
+    #address-fields { display: none; }
 </style>
 </head>
 <body>
@@ -210,13 +199,13 @@ int main() {
     <div id="cart-items"></div>
 
     <label>Способ доставки:</label>
-    <select id="delivery-method" onchange="renderCart()">
+    <select id="delivery-method" onchange="onDeliveryChange()">
         <option value="Самовывоз">Самовывоз — бесплатно</option>
-        <option value="Курьер по Клайпеде">Курьер по Клайпеде — $5.00</option>
-        <option value="Почта Европы">Почта Европы — $15.00</option>
+        <option value="Курьер по городу">Курьер по городу — $5.00</option>
+        <option value="Почта России">Почта России — $8.00</option>
     </select>
 
-     <div id="address-fields">
+    <div id="address-fields">
         <label>Страна:</label>
         <input type="text" id="addr-country" placeholder="Например: Россия">
 
@@ -235,7 +224,6 @@ int main() {
 </div>
 
 <script>
-    // Каждый цвет имеет свой ключ (для имени файла картинки: {id}-{key}.jpg) и отображаемое имя
     const products = [
         { id: "tshirt",  name: "Футболка Palm Angels graffiti", price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Бело-серый", key:"white-gray"}, {name:"Чёрно-синий", key:"black-blue"}, {name:"Бело-красный", key:"white-red"} ] },
@@ -264,7 +252,7 @@ int main() {
     const deliveryPrices = {
         "Самовывоз": 0,
         "Курьер по Клайпеде": 5.00,
-        "Почта Европы": 15.00
+        "Почта Евровы": 15.00
     };
 
     let cart = JSON.parse(localStorage.getItem('cart') || '[]');
@@ -328,6 +316,13 @@ int main() {
         renderCart();
     }
 
+    function onDeliveryChange() {
+        const method = document.getElementById('delivery-method').value;
+        const addressBlock = document.getElementById('address-fields');
+        addressBlock.style.display = (method === 'Самовывоз') ? 'none' : 'block';
+        renderCart();
+    }
+
     function renderCart() {
         const container = document.getElementById('cart-items');
         container.innerHTML = '';
@@ -356,10 +351,9 @@ int main() {
             return;
         }
 
-        const items = cart.map(item => ({ id: item.id, color: item.color, size: item.size }));
         const deliveryMethod = document.getElementById('delivery-method').value;
+        let address = '';
 
-        
         if (deliveryMethod !== 'Самовывоз') {
             const country = document.getElementById('addr-country').value.trim();
             const city = document.getElementById('addr-city').value.trim();
@@ -379,7 +373,7 @@ int main() {
         const response = await fetch('/create-checkout-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items, delivery: deliveryMethod })
+            body: JSON.stringify({ items, delivery: deliveryMethod, address })
         });
 
         const data = await response.json();
@@ -404,7 +398,6 @@ int main() {
         return res;
     });
 
-    // ==== Endpoint для создания оплаты ====
     CROW_ROUTE(app, "/create-checkout-session").methods("POST"_method)([](const crow::request& req) {
         crow::response res;
         res.set_header("Content-Type", "application/json");
@@ -421,8 +414,9 @@ int main() {
             }
 
             std::string deliveryMethod = body.contains("delivery") ? body["delivery"].get<std::string>() : "Самовывоз";
+            std::string address = body.contains("address") ? body["address"].get<std::string>() : "";
 
-            std::string checkoutUrl = createCheckoutSession(cartItems, deliveryMethod);
+            std::string checkoutUrl = createCheckoutSession(cartItems, deliveryMethod, address);
 
             if (checkoutUrl.empty()) {
                 res.code = 500;
@@ -440,7 +434,6 @@ int main() {
         return res;
     });
 
-    // ==== Страницы успеха и отмены ====
     CROW_ROUTE(app, "/success")([]() {
         crow::response res;
         res.set_header("Content-Type", "text/html; charset=utf-8");
@@ -455,7 +448,6 @@ int main() {
         return res;
     });
 
-    // ==== Статика (картинки) ====
     CROW_ROUTE(app, "/static/<string>")([](std::string filename) {
         crow::response res;
         res.set_static_file_info("static/" + filename);
