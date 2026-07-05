@@ -216,6 +216,20 @@ int main() {
         <option value="Почта Европы">Почта Европы — $15.00</option>
     </select>
 
+     <div id="address-fields">
+        <label>Страна:</label>
+        <input type="text" id="addr-country" placeholder="Например: Россия">
+
+        <label>Город:</label>
+        <input type="text" id="addr-city" placeholder="Например: Москва">
+
+        <label>Улица, дом, квартира:</label>
+        <input type="text" id="addr-street" placeholder="Например: ул. Ленина, д. 10, кв. 5">
+
+        <label>Почтовый индекс:</label>
+        <input type="text" id="addr-zip" placeholder="Например: 123456">
+    </div>
+
     <p><b>Итого: $<span id="cart-total">0.00</span></b></p>
     <button id="checkout-btn" onclick="checkout()">Оплатить картой</button>
 </div>
@@ -225,7 +239,7 @@ int main() {
     const products = [
         { id: "tshirt",  name: "Футболка Palm Angels graffiti", price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Бело-серый", key:"white-gray"}, {name:"Чёрно-синий", key:"black-blue"}, {name:"Бело-красный", key:"white-red"} ] },
-        { id: "tshirt3", name: "Футболка Lanvin",  price: 40.00, sizes: null,
+        { id: "tshirt3", name: "Футболка Lanvin",  price: 40.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
         { id: "tshirt1", name: "Футболка Lanvin&Gallery Dept", price: 300.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
@@ -344,6 +358,23 @@ int main() {
 
         const items = cart.map(item => ({ id: item.id, color: item.color, size: item.size }));
         const deliveryMethod = document.getElementById('delivery-method').value;
+
+        
+        if (deliveryMethod !== 'Самовывоз') {
+            const country = document.getElementById('addr-country').value.trim();
+            const city = document.getElementById('addr-city').value.trim();
+            const street = document.getElementById('addr-street').value.trim();
+            const zip = document.getElementById('addr-zip').value.trim();
+
+            if (!country || !city || !street || !zip) {
+                alert('Пожалуйста, заполни все поля адреса доставки.');
+                return;
+            }
+
+            address = `${country}, ${city}, ${street}, индекс ${zip}`;
+        }
+
+        const items = cart.map(item => ({ id: item.id, color: item.color, size: item.size }));
 
         const response = await fetch('/create-checkout-session', {
             method: 'POST',
