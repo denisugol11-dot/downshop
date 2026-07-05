@@ -49,8 +49,8 @@ std::map<std::string, std::string> colorKeys = {
 // ==== Стоимость доставки (в центах) ====
 std::map<std::string, int> deliveryOptions = {
     {"Самовывоз", 0},
-    {"Курьер по городу", 500},
-    {"Почта России", 800}
+    {"Курьер по Клайпеде", 500},
+    {"Почта Европы", 1500}
 };
 
 // ==== Функция для сбора ответа от curl в строку ====
@@ -212,8 +212,8 @@ int main() {
     <label>Способ доставки:</label>
     <select id="delivery-method" onchange="renderCart()">
         <option value="Самовывоз">Самовывоз — бесплатно</option>
-        <option value="Курьер по городу">Курьер по городу — $5.00</option>
-        <option value="Почта России">Почта России — $8.00</option>
+        <option value="Курьер по Клайпеде">Курьер по Клайпеде — $5.00</option>
+        <option value="Почта Европы">Почта Европы — $15.00</option>
     </select>
 
     <p><b>Итого: $<span id="cart-total">0.00</span></b></p>
@@ -249,8 +249,8 @@ int main() {
 
     const deliveryPrices = {
         "Самовывоз": 0,
-        "Курьер по городу": 5.00,
-        "Почта России": 8.00
+        "Курьер по Клайпеде": 5.00,
+        "Почта Европы": 15.00
     };
 
     let cart = JSON.parse(localStorage.getItem('cart') || '[]');
