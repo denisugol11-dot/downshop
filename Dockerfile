@@ -2,12 +2,14 @@ FROM gcc:latest
 
 WORKDIR /app
 
-# Устанавливаем Asio перед компиляцией
-RUN apt-get update && apt-get install -y libasio-dev
+RUN apt-get update && apt-get install -y \
+    libasio-dev \
+    libcurl4-openssl-dev \
+    nlohmann-json3-dev
 
 COPY . .
 
-RUN g++ -std=c++17 -DASIO_STANDALONE main.cpp -o server -lpthread
+RUN g++ -std=c++17 -DASIO_STANDALONE main.cpp -o server -lpthread -lcurl
 
 EXPOSE 10000
 
