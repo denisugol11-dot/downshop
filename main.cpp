@@ -6,6 +6,7 @@
 #include <map>
 #include <vector>
 #include <tuple>
+#include <mutex>
 
 using json = nlohmann::json;
 
@@ -20,7 +21,7 @@ struct Product {
 std::map<std::string, Product> products = {
     {"tshirt",  {"Футболка Palm Angels graffiti",         3000, {"Бело-серый", "Чёрно-синий", "Бело-красный"}, true}},
     {"tshirt3",     {"Футболка Lanvin",           4000,  {"Белый", "Черный"}, false}},
-    {"tshirt1",  {"Футболка Lanvin&Gallery Dept",    30000, {"Белый", "Чёрный"}, true}},
+    {"tshirt1",  {"Футболка Lanvin&Gallery Dept",    3000, {"Белый", "Чёрный"}, true}},
     {"tshirt2",  {"Футболка Marcelo Burlon",      3000, {"Чёрный", "Серый", "Белый"}, true}},
     {"shorts1", {"Шорты Palm Angels",     3000, {"Чёрный", "Серый", "Белый"}, true}},
     {"shorts2", {"Шорты Sprayground",      3000, {"Чёрный", "Серый"}, true}},
@@ -34,9 +35,19 @@ std::map<std::string, Product> products = {
 // ==== Стоимость доставки (в центах) ====
 std::map<std::string, int> deliveryOptions = {
     {"Самовывоз", 0},
-    {"Курьер по городу", 500},
-    {"Почта России", 800}
+    {"DPD", 600},
+    {"Omniva", 450}
 };
+
+// ==== Кэш терминалов Omniva (загружается один раз при старте сервера) ====
+struct OmnivaLocation {
+    std::string id;
+    std::string name;
+    std::string country;
+    std::string address;
+};
+std::vector<OmnivaLocation> omnivaCache;
+std::mutex omnivaCacheMutex;
 
 size_t WriteCallback(void* contents, size_t size, size_t nmemb, std::string* out) {
     out->append((char*)contents, size * nmemb);
@@ -52,12 +63,64 @@ std::string urlEncode(const std::string& value) {
     return result;
 }
 
+// ==== Загрузка публичного списка терминалов Omniva ====
+void loadOmnivaLocations() {
+    CURL* curl = curl_easy_init();
+    std::string response;
+
+    if (curl) {
+        curl_easy_setopt(curl, CURLOPT_URL, "https://www.omniva.ee/locations.json");
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteCallback);
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
+        curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+        curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+    }
+
+    try {
+        json j = json::parse(response);
+        std::vector<OmnivaLocation> temp;
+
+        for (auto& item : j) {
+            std::string country = item.value("A0_NAME", "");
+            std::string type = item.value("TYPE", "0");
+
+            // Берём только автоматы (TYPE 0) в Литве, Латвии и Эстонии
+            if (type != "0") continue;
+            if (country != "LT" && country != "LV" && country != "EE") continue;
+
+            OmnivaLocation loc;
+            loc.id = item.value("ZIP", "");
+            loc.name = item.value("NAME", "");
+            loc.country = country;
+
+            std::string a2 = item.value("A2_NAME", "");
+            std::string a3 = item.value("A3_NAME", "");
+            std::string a5 = item.value("A5_NAME", "");
+            std::string a7 = item.value("A7_NAME", "");
+
+            std::string address = a2;
+            if (!a3.empty()) address += (address.empty() ? "" : ", ") + a3;
+            if (!a5.empty()) address += (address.empty() ? "" : ", ") + a5;
+            if (!a7.empty()) address += " " + a7;
+
+            loc.address = address;
+            temp.push_back(loc);
+        }
+
+        std::lock_guard<std::mutex> lock(omnivaCacheMutex);
+        omnivaCache = temp;
+    } catch (...) {
+        // Если загрузка не удалась, кэш останется пустым — endpoint вернёт пустой список
+    }
+}
+
 // ==== Создание сессии оплаты Stripe ====
-// cartItems = [(product_id, color, size), ...]
-// address = "Страна, Город, Улица/дом, Индекс"
 std::string createCheckoutSession(const std::vector<std::tuple<std::string, std::string, std::string>>& cartItems,
                                    const std::string& deliveryMethod,
-                                   const std::string& address) {
+                                   const std::string& address,
+                                   const std::string& email,
+                                   const std::string& telegram) {
 
     std::string secretKey = std::getenv("STRIPE_SECRET_KEY") ? std::getenv("STRIPE_SECRET_KEY") : "";
     if (secretKey.empty()) {
@@ -90,7 +153,6 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
         index++;
     }
 
-    // Доставка отдельной строкой
     if (deliveryOptions.find(deliveryMethod) != deliveryOptions.end()) {
         int deliveryCost = deliveryOptions[deliveryMethod];
         std::string prefix = "line_items[" + std::to_string(index) + "]";
@@ -107,9 +169,16 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
     postFields += "success_url=" + urlEncode(domain + "/success") + "&";
     postFields += "cancel_url=" + urlEncode(domain + "/cancel") + "&";
 
-    // Передаём адрес в описание платежа — увидишь его в панели Stripe в деталях платежа
-    if (!address.empty()) {
-        postFields += "payment_intent_data[description]=" + urlEncode("Адрес доставки: " + address) + "&";
+    if (!email.empty()) {
+        postFields += "customer_email=" + urlEncode(email) + "&";
+    }
+
+    std::string description;
+    if (!address.empty()) description += "Доставка: " + address + ". ";
+    if (!telegram.empty()) description += "Telegram: " + telegram + ". ";
+
+    if (!description.empty()) {
+        postFields += "payment_intent_data[description]=" + urlEncode(description) + "&";
     }
 
     CURL* curl = curl_easy_init();
@@ -150,6 +219,34 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
 int main() {
     crow::SimpleApp app;
 
+    // Загружаем список терминалов Omniva один раз при старте сервера
+    loadOmnivaLocations();
+
+    // ==== Endpoint со списком терминалов Omniva (для живого поиска на сайте) ====
+    CROW_ROUTE(app, "/omniva-locations")([](const crow::request& req) {
+        crow::response res;
+        res.set_header("Content-Type", "application/json; charset=utf-8");
+
+        std::string countryFilter = req.url_params.get("country") ? req.url_params.get("country") : "LT";
+
+        json arr = json::array();
+        {
+            std::lock_guard<std::mutex> lock(omnivaCacheMutex);
+            for (const auto& loc : omnivaCache) {
+                if (loc.country != countryFilter) continue;
+                arr.push_back({
+                    {"id", loc.id},
+                    {"name", loc.name},
+                    {"address", loc.address}
+                });
+            }
+        }
+
+        res.write(arr.dump());
+        return res;
+    });
+
+    // ==== Главная страница с каталогом ====
     CROW_ROUTE(app, "/")([]() {
         crow::response res;
         res.set_header("Content-Type", "text/html; charset=utf-8");
@@ -169,16 +266,20 @@ int main() {
     .products { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
     .product { background: white; border-radius: 10px; padding: 15px; width: 250px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     .product img { width: 100%; height: 200px; object-fit: cover; border-radius: 8px; }
-    select, input, button { padding: 8px; margin-top: 8px; width: 100%; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; }
+    select, input, button { padding: 8px; margin-top: 8px; width: 100%; border-radius: 6px; border: 1px solid #ccc; box-sizing: border-box; font-family: inherit; }
     button { background: #2563eb; color: white; border: none; cursor: pointer; font-weight: bold; }
     button:hover { background: #1d4ed8; }
-    #cart-box { max-width: 420px; margin: 30px auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    #cart-box { max-width: 420px; margin: 30px auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); position: relative; }
     .cart-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
     .remove-btn { color: red; cursor: pointer; background: none; border: none; width: auto; padding: 0 8px; }
     #checkout-btn { background: #16a34a; margin-top: 15px; }
     #checkout-btn:hover { background: #15803d; }
     label { font-size: 13px; color: #555; margin-top: 10px; display: block; }
-    #address-fields { display: none; }
+    #dpd-fields, #omniva-fields { display: none; }
+    .search-results { border: 1px solid #ddd; border-radius: 6px; max-height: 220px; overflow-y: auto; margin-top: 4px; background: white; position: relative; z-index: 10; }
+    .search-result-item { padding: 8px 10px; cursor: pointer; font-size: 14px; border-bottom: 1px solid #f0f0f0; }
+    .search-result-item:hover { background: #f0f7ff; }
+    .selected-point { background: #eefdf3; border: 1px solid #16a34a; border-radius: 6px; padding: 8px 10px; margin-top: 8px; font-size: 14px; }
 </style>
 </head>
 <body>
@@ -201,23 +302,35 @@ int main() {
     <label>Способ доставки:</label>
     <select id="delivery-method" onchange="onDeliveryChange()">
         <option value="Самовывоз">Самовывоз — бесплатно</option>
-        <option value="Курьер по городу">Курьер по городу — $5.00</option>
-        <option value="Почта России">Почта России — $8.00</option>
+        <option value="DPD">DPD — $12.00</option>
+        <option value="Omniva">Omniva — $7.00</option>
     </select>
 
-    <div id="address-fields">
+    <!-- DPD: простая форма адреса (пока без карты пунктов) -->
+    <div id="dpd-fields">
         <label>Страна:</label>
-        <input type="text" id="addr-country" placeholder="Например: Россия">
-
+        <input type="text" id="addr-country" placeholder="Например: Литва">
         <label>Город:</label>
-        <input type="text" id="addr-city" placeholder="Например: Москва">
-
-        <label>Улица, дом, квартира:</label>
-        <input type="text" id="addr-street" placeholder="Например: ул. Ленина, д. 10, кв. 5">
-
+        <input type="text" id="addr-city" placeholder="Например: Клайпеда">
+        <label>Улица, дом, квартира (или адрес пункта DPD):</label>
+        <input type="text" id="addr-street" placeholder="Например: ул. Тайкос, д. 10">
         <label>Почтовый индекс:</label>
-        <input type="text" id="addr-zip" placeholder="Например: 123456">
+        <input type="text" id="addr-zip" placeholder="Например: 92100">
     </div>
+
+    <!-- Omniva: живой поиск реальных терминалов -->
+    <div id="omniva-fields">
+        <label>Найди ближайший терминал Omniva:</label>
+        <input type="text" id="omniva-search" placeholder="Введи город или улицу..." oninput="searchOmniva()" autocomplete="off">
+        <div id="omniva-results" class="search-results" style="display:none;"></div>
+        <div id="omniva-selected" style="display:none;"></div>
+    </div>
+
+    <h3 style="font-size: 15px; margin: 20px 0 5px; color: #333; border-top: 1px solid #eee; padding-top: 15px;">Контакты для связи</h3>
+    <label>Электронная почта:</label>
+    <input type="email" id="contact-email" placeholder="example@mail.com">
+    <label>Telegram (юзернейм):</label>
+    <input type="text" id="contact-telegram" placeholder="@username">
 
     <p><b>Итого: $<span id="cart-total">0.00</span></b></p>
     <button id="checkout-btn" onclick="checkout()">Оплатить картой</button>
@@ -227,9 +340,9 @@ int main() {
     const products = [
         { id: "tshirt",  name: "Футболка Palm Angels graffiti", price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Бело-серый", key:"white-gray"}, {name:"Чёрно-синий", key:"black-blue"}, {name:"Бело-красный", key:"white-red"} ] },
-        { id: "tshirt3", name: "Футболка Lanvin",  price: 40.00, sizes: ["S","M","L","XL"],
+        { id: "tshirt3", name: "Футболка Lanvin",  price: 40.00, sizes: null,
           colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
-        { id: "tshirt1", name: "Футболка Lanvin&Gallery Dept", price: 300.00, sizes: ["S","M","L","XL"],
+        { id: "tshirt1", name: "Футболка Lanvin&Gallery Dept", price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
         { id: "tshirt2", name: "Футболка Marcelo Burlon",    price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Чёрный", key:"black"}, {name:"Серый", key:"gray"}, {name:"Белый", key:"white"} ] },
@@ -251,11 +364,13 @@ int main() {
 
     const deliveryPrices = {
         "Самовывоз": 0,
-        "Курьер по Клайпеде": 5.00,
-        "Почта Евровы": 15.00
+        "DPD": 6.00,
+        "Omniva": 4.50
     };
 
     let cart = JSON.parse(localStorage.getItem('cart') || '[]');
+    let omnivaData = null;
+    let selectedOmnivaPoint = null;
 
     function productImage(id, colorKey) {
         return `/static/${id}-${colorKey}.jpg`;
@@ -316,11 +431,62 @@ int main() {
         renderCart();
     }
 
-    function onDeliveryChange() {
+    async function onDeliveryChange() {
         const method = document.getElementById('delivery-method').value;
-        const addressBlock = document.getElementById('address-fields');
-        addressBlock.style.display = (method === 'Самовывоз') ? 'none' : 'block';
+        document.getElementById('dpd-fields').style.display = (method === 'DPD') ? 'block' : 'none';
+        document.getElementById('omniva-fields').style.display = (method === 'Omniva') ? 'block' : 'none';
+
+        if (method === 'Omniva' && omnivaData === null) {
+            try {
+                const response = await fetch('/omniva-locations?country=LT');
+                omnivaData = await response.json();
+            } catch (e) {
+                omnivaData = [];
+            }
+        }
+
         renderCart();
+    }
+
+    function searchOmniva() {
+        const query = document.getElementById('omniva-search').value.trim().toLowerCase();
+        const resultsBox = document.getElementById('omniva-results');
+
+        if (!omnivaData || query.length < 2) {
+            resultsBox.style.display = 'none';
+            return;
+        }
+
+        const matches = omnivaData.filter(loc =>
+            loc.name.toLowerCase().includes(query) || loc.address.toLowerCase().includes(query)
+        ).slice(0, 15);
+
+        if (matches.length === 0) {
+            resultsBox.innerHTML = '<div class="search-result-item">Ничего не найдено</div>';
+            resultsBox.style.display = 'block';
+            return;
+        }
+
+        resultsBox.innerHTML = matches.map(loc =>
+            `<div class="search-result-item" onclick='selectOmnivaPoint(${JSON.stringify(loc).replace(/'/g, "&apos;")})'>
+                <b>${loc.name}</b><br><span style="color:#777">${loc.address}</span>
+            </div>`
+        ).join('');
+        resultsBox.style.display = 'block';
+    }
+
+    function selectOmnivaPoint(loc) {
+        selectedOmnivaPoint = loc;
+        document.getElementById('omniva-search').value = '';
+        document.getElementById('omniva-results').style.display = 'none';
+        const selectedBox = document.getElementById('omniva-selected');
+        selectedBox.innerHTML = `<div class="selected-point">📦 Выбран пункт: <b>${loc.name}</b><br>${loc.address} <button style="width:auto;padding:2px 8px;margin-left:8px;background:#eee;color:#333;" onclick="clearOmnivaPoint()">Изменить</button></div>`;
+        selectedBox.style.display = 'block';
+    }
+
+    function clearOmnivaPoint() {
+        selectedOmnivaPoint = null;
+        document.getElementById('omniva-selected').style.display = 'none';
     }
 
     function renderCart() {
@@ -345,6 +511,10 @@ int main() {
         document.getElementById('cart-total').innerText = total.toFixed(2);
     }
 
+    function isValidEmail(email) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+    }
+
     async function checkout() {
         if (cart.length === 0) {
             alert('Корзина пуста!');
@@ -354,18 +524,35 @@ int main() {
         const deliveryMethod = document.getElementById('delivery-method').value;
         let address = '';
 
-        if (deliveryMethod !== 'Самовывоз') {
+        if (deliveryMethod === 'DPD') {
             const country = document.getElementById('addr-country').value.trim();
             const city = document.getElementById('addr-city').value.trim();
             const street = document.getElementById('addr-street').value.trim();
             const zip = document.getElementById('addr-zip').value.trim();
 
             if (!country || !city || !street || !zip) {
-                alert('Пожалуйста, заполни все поля адреса доставки.');
+                alert('Пожалуйста, заполни все поля адреса доставки DPD.');
                 return;
             }
+            address = `${country}, ${city}, ${street}, индекс ${zip} (DPD)`;
+        } else if (deliveryMethod === 'Omniva') {
+            if (!selectedOmnivaPoint) {
+                alert('Пожалуйста, выбери терминал Omniva из списка.');
+                return;
+            }
+            address = `Omniva терминал: ${selectedOmnivaPoint.name}, ${selectedOmnivaPoint.address}`;
+        }
 
-            address = `${country}, ${city}, ${street}, индекс ${zip}`;
+        const email = document.getElementById('contact-email').value.trim();
+        const telegram = document.getElementById('contact-telegram').value.trim();
+
+        if (!email || !isValidEmail(email)) {
+            alert('Пожалуйста, укажи корректный email для связи.');
+            return;
+        }
+        if (!telegram) {
+            alert('Пожалуйста, укажи свой Telegram для связи.');
+            return;
         }
 
         const items = cart.map(item => ({ id: item.id, color: item.color, size: item.size }));
@@ -373,7 +560,7 @@ int main() {
         const response = await fetch('/create-checkout-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items, delivery: deliveryMethod, address })
+            body: JSON.stringify({ items, delivery: deliveryMethod, address, email, telegram })
         });
 
         const data = await response.json();
@@ -415,8 +602,10 @@ int main() {
 
             std::string deliveryMethod = body.contains("delivery") ? body["delivery"].get<std::string>() : "Самовывоз";
             std::string address = body.contains("address") ? body["address"].get<std::string>() : "";
+            std::string email = body.contains("email") ? body["email"].get<std::string>() : "";
+            std::string telegram = body.contains("telegram") ? body["telegram"].get<std::string>() : "";
 
-            std::string checkoutUrl = createCheckoutSession(cartItems, deliveryMethod, address);
+            std::string checkoutUrl = createCheckoutSession(cartItems, deliveryMethod, address, email, telegram);
 
             if (checkoutUrl.empty()) {
                 res.code = 500;
