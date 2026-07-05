@@ -364,8 +364,8 @@ int main() {
 
     const deliveryPrices = {
         "Самовывоз": 0,
-        "DPD": 6.00,
-        "Omniva": 4.50
+        "DPD": 12.00,
+        "Omniva": 7.00
     };
 
     let cart = JSON.parse(localStorage.getItem('cart') || '[]');
