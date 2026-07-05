@@ -302,8 +302,8 @@ int main() {
     <label>Способ доставки:</label>
     <select id="delivery-method" onchange="onDeliveryChange()">
         <option value="Самовывоз">Самовывоз — бесплатно</option>
-        <option value="DPD">DPD — $12.00</option>
-        <option value="Omniva">Omniva — $7.00</option>
+        <option value="DPD">DPD — $12.00-30.00</option>
+        <option value="Omniva">Omniva — $8.00</option>
     </select>
 
     <!-- DPD: простая форма адреса (пока без карты пунктов) -->
@@ -340,7 +340,7 @@ int main() {
     const products = [
         { id: "tshirt",  name: "Футболка Palm Angels graffiti", price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Бело-серый", key:"white-gray"}, {name:"Чёрно-синий", key:"black-blue"}, {name:"Бело-красный", key:"white-red"} ] },
-        { id: "tshirt3", name: "Футболка Lanvin",  price: 40.00, sizes: null,
+        { id: "tshirt3", name: "Футболка Lanvin",  price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
         { id: "tshirt1", name: "Футболка Lanvin&Gallery Dept", price: 30.00, sizes: ["S","M","L","XL"],
           colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
