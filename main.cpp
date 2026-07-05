@@ -12,7 +12,7 @@ using json = nlohmann::json;
 // ==== Каталог товаров (хранится на сервере — цену клиенту не доверяем!) ====
 struct Product {
     std::string name;
-    int price_cents; // цена в центах (1599 = $15.99)
+    int price_cents; // цена в центах (3000 = $30.00)
     std::vector<std::string> colors;
     bool has_sizes;
 };
@@ -29,6 +29,28 @@ std::map<std::string, Product> products = {
     {"shoes1",  {"Кроссовки Jordan5",    9000, {"Белый", "Чёрный", "Красный", "Черно-синий"}, true}},
     {"shoes2",  {"Кроссовки Off white be right back", 10000, {"Чёрный", "Красный", "Белый", "Зеленый", "Бело-синий"}, true}},
     {"shoes3",  {"Кроссовки Nike Acronym",  12000, {"Белый", "Чёрный", "Бело-оранжевый"}, true}}
+};
+
+// ==== Соответствие цвета -> ключ для имени файла картинки ====
+std::map<std::string, std::string> colorKeys = {
+    {"Белый", "white"},
+    {"Чёрный", "black"},
+    {"Серый", "gray"},
+    {"Красный", "red"},
+    {"Синий", "blue"},
+    {"Зелёный", "green"},
+    {"Бело-серый", "white-gray"},
+    {"Чёрно-синий", "black-blue"},
+    {"Бело-красный", "white-red"},
+    {"Бело-синий", "white-blue"},
+    {"Бело-оранжевый", "white-orange"}
+};
+
+// ==== Стоимость доставки (в центах) ====
+std::map<std::string, int> deliveryOptions = {
+    {"Самовывоз", 0},
+    {"Курьер по городу", 500},
+    {"Почта России", 800}
 };
 
 // ==== Функция для сбора ответа от curl в строку ====
@@ -49,7 +71,8 @@ std::string urlEncode(const std::string& value) {
 
 // ==== Создание сессии оплаты Stripe ====
 // cartItems = [(product_id, color, size), ...]
-std::string createCheckoutSession(const std::vector<std::tuple<std::string, std::string, std::string>>& cartItems) {
+std::string createCheckoutSession(const std::vector<std::tuple<std::string, std::string, std::string>>& cartItems,
+                                   const std::string& deliveryMethod) {
 
     std::string secretKey = std::getenv("STRIPE_SECRET_KEY") ? std::getenv("STRIPE_SECRET_KEY") : "";
     if (secretKey.empty()) {
@@ -77,6 +100,19 @@ std::string createCheckoutSession(const std::vector<std::tuple<std::string, std:
         postFields += prefix + "[price_data][currency]=usd&";
         postFields += prefix + "[price_data][product_data][name]=" + urlEncode(label) + "&";
         postFields += prefix + "[price_data][unit_amount]=" + std::to_string(p.price_cents) + "&";
+        postFields += prefix + "[quantity]=1&";
+
+        index++;
+    }
+
+    // Добавляем доставку отдельной строкой
+    if (deliveryOptions.find(deliveryMethod) != deliveryOptions.end()) {
+        int deliveryCost = deliveryOptions[deliveryMethod];
+        std::string prefix = "line_items[" + std::to_string(index) + "]";
+
+        postFields += prefix + "[price_data][currency]=usd&";
+        postFields += prefix + "[price_data][product_data][name]=" + urlEncode("Доставка: " + deliveryMethod) + "&";
+        postFields += prefix + "[price_data][unit_amount]=" + std::to_string(deliveryCost) + "&";
         postFields += prefix + "[quantity]=1&";
 
         index++;
@@ -137,7 +173,10 @@ int main() {
 <title>DOWNSHOP</title>
 <style>
     body { font-family: 'Segoe UI', Arial, sans-serif; background: #f4f4f4; padding: 20px; margin: 0; }
-    h1.logo { text-align:center; font-size: 48px; font-weight: 800; letter-spacing: 3px; background: linear-gradient(90deg, #2563eb, #16a34a); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 30px; }
+    h1.logo { text-align:center; font-size: 48px; font-weight: 800; letter-spacing: 3px; background: linear-gradient(90deg, #2563eb, #16a34a); -webkit-background-clip: text; background-clip: text; color: transparent; margin-bottom: 10px; }
+    .contact-block { text-align:center; margin-bottom: 25px; }
+    .contact-block a { display:inline-flex; align-items:center; gap:8px; background:#229ED9; color:white; padding:10px 20px; border-radius:30px; text-decoration:none; font-weight:bold; font-size:15px; }
+    .contact-block p { max-width:500px; margin:15px auto 0; font-size:14px; color:#555; line-height:1.5; }
     .products { display: flex; flex-wrap: wrap; gap: 20px; justify-content: center; }
     .product { background: white; border-radius: 10px; padding: 15px; width: 250px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     .product img { width: 100%; height: 200px; object-fit: cover; border-radius: 8px; }
@@ -145,7 +184,7 @@ int main() {
     select, button { padding: 8px; margin-top: 8px; width: 100%; border-radius: 6px; border: 1px solid #ccc; }
     button { background: #2563eb; color: white; border: none; cursor: pointer; font-weight: bold; }
     button:hover { background: #1d4ed8; }
-    #cart-box { max-width: 400px; margin: 30px auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+    #cart-box { max-width: 420px; margin: 30px auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
     .cart-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid #eee; }
     .remove-btn { color: red; cursor: pointer; background: none; border: none; width: auto; padding: 0 8px; }
     #checkout-btn { background: #16a34a; margin-top: 15px; }
@@ -156,14 +195,12 @@ int main() {
 <body>
 
 <h1 class="logo">DOWNSHOP</h1>
-<div style="text-align:center; margin-bottom: 25px;">
-    <a href="https://t.me/ТВОЙ_ЮЗЕРНЕЙМ" target="_blank" style="display:inline-flex; align-items:center; gap:8px; background:#229ED9; color:white; padding:10px 20px; border-radius:30px; text-decoration:none; font-weight:bold; font-size:15px;">
+<div class="contact-block">
+    <a href="https://t.me/bahurzd1" target="_blank">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="white"><path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.562 8.248-1.97 9.29c-.145.658-.537.818-1.084.508l-3-2.212-1.448 1.394c-.16.16-.295.295-.605.295l.213-3.053 5.56-5.023c.242-.213-.054-.334-.373-.121l-6.871 4.326-2.962-.924c-.643-.204-.657-.643.136-.953l11.57-4.461c.538-.196 1.006.128.834.334z"/></svg>
         Написать в Telegram
     </a>
-    <p style="max-width:500px; margin:15px auto 0; font-size:14px; color:#555; line-height:1.5;">
-        Не нашли нужную вещь или цвет? Свяжитесь с нами — мы сможем сделать специальный заказ для вас.
-    </p>
+    <p>Не нашли нужную вещь или цвет? Свяжитесь с нами — мы сможем сделать специальный заказ для вас.</p>
 </div>
 
 <div class="products" id="products-container"></div>
@@ -171,33 +208,63 @@ int main() {
 <div id="cart-box">
     <h2>Корзина</h2>
     <div id="cart-items"></div>
+
+    <label>Способ доставки:</label>
+    <select id="delivery-method" onchange="renderCart()">
+        <option value="Самовывоз">Самовывоз — бесплатно</option>
+        <option value="Курьер по городу">Курьер по городу — $5.00</option>
+        <option value="Почта России">Почта России — $8.00</option>
+    </select>
+
     <p><b>Итого: $<span id="cart-total">0.00</span></b></p>
     <button id="checkout-btn" onclick="checkout()">Оплатить картой</button>
 </div>
 
 <script>
+    // Каждый цвет имеет свой ключ (для имени файла картинки: {id}-{key}.jpg) и отображаемое имя
     const products = [
-        { id: "tshirt",  name: "Футболка Palm Angels graffiti",        price: 30.00, image: "tshirt.jpg",  colors: ["Бело-серый", "Чёрно-синий", "Бело-красный"], sizes: ["S","M","L","XL"] },
-        { id: "tshirt3",     name: "Футболка Lanvin",           price: 40.00,  image: "tshirt3.jpg",     colors: ["Белый", "Черный"], sizes: ["S","M","L","XL"] },
-        { id: "tshirt1",  name: "Футболка Lanvin&Gallery Dept",    price: 30.00, image: "tshirt1.jpg",  colors: ["Белый", "Черный"], sizes: ["S","M","L","XL"] },
-        { id: "tshirt2",  name: "Футболка Marcelo Burlon",      price: 30.00, image: "tshirt2.jpg",  colors: ["Чёрный", "Серый", "Белый"], sizes: ["S","M","L","XL"] },
-        { id: "shorts1", name: "Шорты Palm Angels",     price: 20.00, image: "shorts1.jpg", colors: ["Чёрный", "Серый", "Белый"], sizes: ["S","M","L","XL"] },
-        { id: "shorts2", name: "Шорты Sprayground",      price: 30.00, image: "shorts2.jpg", colors: ["Чёрный", "Серый"], sizes: ["S","M","L","XL"] },
-        { id: "pants1",  name: "Спортивные штаны gallery dept",    price: 35.00, image: "pants1.jpg",  colors: ["Чёрный", "Серый"], sizes: ["S","M","L","XL"] },
-        { id: "pants2",  name: "Штаны Purple brand flared",      price: 40.00, image: "pants2.jpg",  colors: ["Чёрный", "Серый"], sizes: ["S","M","L","XL"] },
-        { id: "shoes1",  name: "Кроссовки Jordan5",    price: 90.00, image: "shoes1.jpg",  colors: ["Белый", "Чёрный", "Красный", "Черно-синий"], sizes: ["38","39","40","41","42","43","44"] },
-        { id: "shoes2",  name: "Кроссовки Off white be right back", price: 100.00, image: "shoes2.jpg",  colors: ["Чёрный", "Красный", "Белый", "Зеленый", "Бело-синий"], sizes: ["38","39","40","41","42","43","44"] },
-        { id: "shoes3",  name: "Кроссовки Nike Acronym",  price: 120.00, image: "shoes3.jpg",  colors: ["Белый", "Чёрный", "Бело-оранжевый"], sizes: ["38","39","40","41","42","43","44"] }
+        { id: "tshirt",  name: "Футболка Palm Angels graffiti", price: 30.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Бело-серый", key:"white-gray"}, {name:"Чёрно-синий", key:"black-blue"}, {name:"Бело-красный", key:"white-red"} ] },
+        { id: "tshirt3", name: "Футболка Lanvin",  price: 40.00, sizes: null,
+          colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
+        { id: "tshirt1", name: "Футболка Lanvin&Gallery Dept", price: 300.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"} ] },
+        { id: "tshirt2", name: "Футболка Marcelo Burlon",    price: 30.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Чёрный", key:"black"}, {name:"Серый", key:"gray"}, {name:"Белый", key:"white"} ] },
+        { id: "shorts1", name: "Шорты Palm Angels",  price: 30.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Чёрный", key:"black"}, {name:"Серый", key:"gray"}, {name:"Белый", key:"white"} ] },
+        { id: "shorts2", name: "Шорты Sprayground",       price: 30.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Чёрный", key:"black"}, {name:"Серый", key:"gray"} ] },
+        { id: "pants1",  name: "Штаны Спортивные gallery dept",  price: 35.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Чёрный", key:"black"}, {name:"Серый", key:"gray"} ] },
+        { id: "pants2",  name: "Штаны Purple brand flared",        price: 40.00, sizes: ["S","M","L","XL"],
+          colors: [ {name:"Чёрный", key:"black"}, {name:"Серый", key:"gray"} ] },
+        { id: "shoes1",  name: "Кроссовки Jordan5", price: 90.00, sizes: ["38","39","40","41","42","43","44"],
+          colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"}, {name:"Красный", key:"red"}, {name:"Чёрно-синий", key:"black-blue"} ] },
+        { id: "shoes2",  name: "Кроссовки Off white be right back",    price: 100.00, sizes: ["38","39","40","41","42","43","44"],
+          colors: [ {name:"Чёрный", key:"black"}, {name:"Красный", key:"red"}, {name:"Белый", key:"white"}, {name:"Зелёный", key:"green"}, {name:"Бело-синий", key:"white-blue"} ] },
+        { id: "shoes3",  name: "Кроссовки Nike Acronym",  price: 120.00, sizes: ["38","39","40","41","42","43","44"],
+          colors: [ {name:"Белый", key:"white"}, {name:"Чёрный", key:"black"}, {name:"Бело-оранжевый", key:"white-orange"} ] }
     ];
 
+    const deliveryPrices = {
+        "Самовывоз": 0,
+        "Курьер по городу": 5.00,
+        "Почта России": 8.00
+    };
+
     let cart = JSON.parse(localStorage.getItem('cart') || '[]');
+
+    function productImage(id, colorKey) {
+        return `/static/${id}-${colorKey}.jpg`;
+    }
 
     function renderProducts() {
         const container = document.getElementById('products-container');
         container.innerHTML = '';
 
         products.forEach(p => {
-            const colorOptions = p.colors.map(c => `<option value="${c}">${c}</option>`).join('');
+            const colorOptions = p.colors.map(c => `<option value="${c.key}">${c.name}</option>`).join('');
             const sizeBlock = p.sizes
                 ? `<label>Размер:</label>
                    <select id="size-${p.id}">
@@ -207,10 +274,11 @@ int main() {
 
             container.innerHTML += `
                 <div class="product">
-                    <img src="/static/${p.image}" alt="${p.name}">
+                    <img id="img-${p.id}" src="${productImage(p.id, p.colors[0].key)}" alt="${p.name}"
+                         onerror="this.onerror=null; this.src='/static/${p.id}.jpg'">
                     <h3>${p.name} - $${p.price.toFixed(2)}</h3>
                     <label>Цвет:</label>
-                    <select id="color-${p.id}">${colorOptions}</select>
+                    <select id="color-${p.id}" onchange="changeImage('${p.id}')">${colorOptions}</select>
                     ${sizeBlock}
                     <button onclick="addToCart('${p.id}')">Добавить в корзину</button>
                 </div>
@@ -218,13 +286,21 @@ int main() {
         });
     }
 
+    function changeImage(id) {
+        const colorKey = document.getElementById('color-' + id).value;
+        const img = document.getElementById('img-' + id);
+        img.onerror = function() { this.onerror = null; this.src = `/static/${id}.jpg`; };
+        img.src = productImage(id, colorKey);
+    }
+
     function addToCart(id) {
         const product = products.find(p => p.id === id);
-        const color = document.getElementById('color-' + id).value;
+        const colorKey = document.getElementById('color-' + id).value;
+        const colorObj = product.colors.find(c => c.key === colorKey);
         const sizeSelect = document.getElementById('size-' + id);
         const size = sizeSelect ? sizeSelect.value : '';
 
-        cart.push({ id, name: product.name, color, size, price: product.price });
+        cart.push({ id, name: product.name, color: colorObj.name, size, price: product.price });
         saveCart();
     }
 
@@ -252,6 +328,11 @@ int main() {
                 </div>
             `;
         });
+
+        const deliveryMethod = document.getElementById('delivery-method').value;
+        const deliveryCost = deliveryPrices[deliveryMethod] || 0;
+        total += deliveryCost;
+
         document.getElementById('cart-total').innerText = total.toFixed(2);
     }
 
@@ -262,11 +343,12 @@ int main() {
         }
 
         const items = cart.map(item => ({ id: item.id, color: item.color, size: item.size }));
+        const deliveryMethod = document.getElementById('delivery-method').value;
 
         const response = await fetch('/create-checkout-session', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ items })
+            body: JSON.stringify({ items, delivery: deliveryMethod })
         });
 
         const data = await response.json();
@@ -307,7 +389,9 @@ int main() {
                 cartItems.push_back({id, color, size});
             }
 
-            std::string checkoutUrl = createCheckoutSession(cartItems);
+            std::string deliveryMethod = body.contains("delivery") ? body["delivery"].get<std::string>() : "Самовывоз";
+
+            std::string checkoutUrl = createCheckoutSession(cartItems, deliveryMethod);
 
             if (checkoutUrl.empty()) {
                 res.code = 500;
