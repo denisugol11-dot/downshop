@@ -302,7 +302,7 @@ int main() {
     <label>Способ доставки:</label>
     <select id="delivery-method" onchange="onDeliveryChange()">
         <option value="Самовывоз">Самовывоз — бесплатно</option>
-        <option value="DPD">DPD — $12.00-30.00</option>
+        <option value="DPD">DPD-средняя 15 если будет больше надо будет доплатить — $12.00-30.00</option>
         <option value="Omniva">Omniva — $8.00</option>
     </select>
 
@@ -364,8 +364,8 @@ int main() {
 
     const deliveryPrices = {
         "Самовывоз": 0,
-        "DPD": 12.00,
-        "Omniva": 7.00
+        "DPD": 15.00,
+        "Omniva": 8.00
     };
 
     let cart = JSON.parse(localStorage.getItem('cart') || '[]');
